@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "iThesis",
+    "slug": "ithesis-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "ithesis",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#731B2A"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ph.edu.batstateu.ithesis"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#731B2A"
+      },
+      "package": "ph.edu.batstateu.ithesis"
+    },
+    "plugins": ["expo-secure-store", "expo-font"],
+    "extra": {
+      "apiBaseUrl": "http://10.0.2.2:8000/api/v1"
+    }
+  }
+}
