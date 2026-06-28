@@ -11,6 +11,7 @@ import { Check, ChevronDown } from 'lucide-react-native';
 
 import { TextField } from '@/components/ui/TextField';
 import { Button } from '@/components/ui/Button';
+import { formatPersonName } from '@/utils/format';
 import { colors, fonts, radius, shadows, spacing, typography } from '@/theme';
 
 export interface LibraryAccessInfo {
@@ -56,15 +57,6 @@ const COURSES = [
   'Bachelor of Electronics Engineering Technology',
   'Bachelor of Instrumentation & Control',
 ];
-
-/** Title-cases a typed name and strips disallowed chars (matches the web). */
-function formatPersonName(value: string): string {
-  const sanitized = value.replace(/[^A-Za-z.\s]/g, '');
-  return sanitized.replace(
-    /\b([A-Za-z])([A-Za-z]*)\b/g,
-    (_, first: string, rest: string) => `${first.toUpperCase()}${rest.toLowerCase()}`,
-  );
-}
 
 export function LibraryAccessModal({ visible, submitting, error, onCancel, onSubmit }: Props) {
   const [firstName, setFirstName] = useState('');

@@ -35,3 +35,43 @@ export function initials(name?: string): string {
     .map((p) => p[0]?.toUpperCase() ?? '')
     .join('');
 }
+
+/** Institutional student email domain (matches the web upload modal). */
+export const SCHOOL_EMAIL_DOMAIN = 'g.batstate-u.edu.ph';
+
+/**
+ * Strips disallowed characters and title-cases each word.
+ * Mirrors `formatPersonName` in the web AccessModal / UploadAccessModal.
+ */
+export function formatPersonName(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z.\s]/g, '');
+  return sanitized.replace(
+    /\b([A-Za-z])([A-Za-z]*)\b/g,
+    (_, first: string, rest: string) => `${first.toUpperCase()}${rest.toLowerCase()}`,
+  );
+}
+
+/** Auto-formats an SR code to `YY-XXXXX` as the user types. */
+export function formatSrCode(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 7);
+  return digits.length <= 2 ? digits : `${digits.slice(0, 2)}-${digits.slice(2)}`;
+}
+
+/** True when an SR code matches `YY-XXXXX` (e.g. 22-37726). */
+export function isValidSrCode(code: string): boolean {
+  return /^(\d{2})-(\d{5})$/.test(code.trim());
+}
+
+/**
+ * Coerces an email to the institutional domain once `@` is typed, mirroring the
+ * web's snap-to-domain behaviour. Returns the (possibly) rewritten address.
+ */
+export function normalizeInstitutionalEmail(value: string): string {
+  const atIndex = value.indexOf('@');
+  return atIndex >= 0 ? `${value.slice(0, atIndex).trim()}@${SCHOOL_EMAIL_DOMAIN}` : value;
+}
+
+/** True when an email is a valid institutional address (@g.batstate-u.edu.ph). */
+export function isValidInstitutionalEmail(email: string): boolean {
+  return /^[^@\s]+@g\.batstate-u\.edu\.ph$/i.test(email.trim());
+}

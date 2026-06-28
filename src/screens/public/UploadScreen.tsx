@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -10,22 +10,24 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import axios from 'axios';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   ArrowLeft,
   CheckCircle2,
   Copy,
   FileText,
-  KeyRound,
   Upload as UploadIcon,
 } from 'lucide-react-native';
 
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { Screen } from '@/components/ui/Screen';
+import { UploadAccessModal, type UploadAccessInfo } from '@/components/UploadAccessModal';
 import { useDepartments } from '@/hooks/queries';
 import { accessApi, guestApi, thesisApi } from '@/api/services';
 import { describeApiError } from '@/api/client';
+import { readGuestSession, saveGuestSession } from '@/utils/guestSession';
 import { colors, fonts, radius, spacing, typography } from '@/theme';
 import type { Department } from '@/types';
 import type { RootStackParamList } from '@/navigation/types';
@@ -33,11 +35,42 @@ import type { RootStackParamList } from '@/navigation/types';
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type PickedFile = { uri: string; name: string; mimeType?: string };
 
+/** Maps an /access/verify failure to a friendly message (mirrors the web). */
+function mapVerifyError(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    if (err.response?.status === 429) {
+      const m = (err.response.data as { message?: string } | undefined)?.message;
+      return m && m.trim() ? m : 'Too many access code attempts. Please wait before trying again.';
+    }
+    const code = (err.response?.data as { error?: string } | undefined)?.error;
+    if (code === 'invalid') return 'Invalid code.';
+    if (code === 'used') return 'This code has already been used.';
+    if (code === 'expired') return 'This code has expired.';
+  }
+  return describeApiError(err, 'Unable to verify access code. Please try again.');
+}
+
 export function UploadScreen() {
   const navigation = useNavigation<Nav>();
   const { data: departments } = useDepartments();
 
-  const [accessCode, setAccessCode] = useState('');
+  // ── Upload access gate (mirrors the web's UploadAccessModal) ──
+  const [accessGranted, setAccessGranted] = useState(false);
+  const [accessSubmitting, setAccessSubmitting] = useState(false);
+  const [accessError, setAccessError] = useState<string | undefined>(undefined);
+  // Pre-fill the submitter name from an existing guest session, like the web.
+  const [prefillName, setPrefillName] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    readGuestSession().then((s) => {
+      if (active && s?.name) setPrefillName(s.name);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const [uploaderName, setUploaderName] = useState('');
   const [uploaderEmail, setUploaderEmail] = useState('');
   const [uploaderSrCode, setUploaderSrCode] = useState('');
@@ -71,7 +104,6 @@ export function UploadScreen() {
   };
 
   const canSubmit =
-    accessCode.trim() &&
     title.trim() &&
     authorList.length > 0 &&
     adviser.trim() &&
@@ -80,6 +112,47 @@ export function UploadScreen() {
     abstractWords <= 300 &&
     file &&
     !submitting;
+
+  // Gate: verify (and consume) the access code up front, like the web. On
+  // success we hydrate the submitter fields and reveal the thesis form.
+  const handleAccessSubmit = async (info: UploadAccessInfo) => {
+    setAccessSubmitting(true);
+    setAccessError(undefined);
+    try {
+      const verify = await accessApi.verify({
+        code: info.accessCode,
+        name: info.name,
+        email: info.email,
+        srCode: info.srCode,
+      });
+      if (!verify.ok) {
+        setAccessError('That access code is invalid, expired, or already used.');
+        return;
+      }
+      setUploaderName(info.name);
+      setUploaderEmail(info.email);
+      setUploaderSrCode(info.srCode);
+
+      // Persist + report the upload guest session for analytics (best-effort).
+      const session = await saveGuestSession(
+        { name: info.name, email: info.email, srCode: info.srCode, code: info.accessCode },
+        'upload',
+      );
+      void guestApi.trackSession({
+        name: session.name,
+        email: session.email,
+        accessLevel: 'upload',
+        sessionId: session.sessionId,
+        srCode: session.srCode,
+      });
+
+      setAccessGranted(true);
+    } catch (err) {
+      setAccessError(mapVerifyError(err));
+    } finally {
+      setAccessSubmitting(false);
+    }
+  };
 
   const onSubmit = async () => {
     if (!canSubmit || !file) return;
@@ -90,27 +163,7 @@ export function UploadScreen() {
     setSubmitting(true);
     setError('');
     try {
-      // 1) Verify (and consume) the upload access code, like the web flow.
-      const verify = await accessApi.verify({
-        code: accessCode,
-        name: uploaderName,
-        email: uploaderEmail,
-        srCode: uploaderSrCode,
-      });
-      if (!verify.ok) {
-        setError('That access code is invalid, expired, or already used.');
-        return;
-      }
-
-      // Record the guest's upload session for analytics (best-effort).
-      void guestApi.trackSession({
-        name: uploaderName,
-        email: uploaderEmail,
-        accessLevel: 'upload',
-        srCode: uploaderSrCode,
-      });
-
-      // 2) Submit the thesis.
+      // Access code was already verified + consumed at the gate; just submit.
       const res = await thesisApi.submit({
         title: title.trim(),
         abstract: abstract.trim(),
@@ -152,6 +205,38 @@ export function UploadScreen() {
     );
   }
 
+  // Gate: until the access code is verified, hold the form behind the modal.
+  if (!accessGranted) {
+    return (
+      <Screen edges={['top']}>
+        <View style={styles.topBar}>
+          <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.back}>
+            <ArrowLeft size={20} color={colors.primary} />
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
+        </View>
+        <View style={styles.locked}>
+          <View style={styles.lockBadge}>
+            <UploadIcon size={30} color={colors.primary} />
+          </View>
+          <Text style={styles.lockTitle}>Thesis Upload Access</Text>
+          <Text style={styles.lockBody}>
+            Enter your details and the one-time access code from the library to submit a thesis.
+          </Text>
+        </View>
+        <UploadAccessModal
+          key={prefillName}
+          visible
+          submitting={accessSubmitting}
+          error={accessError}
+          initial={{ name: prefillName }}
+          onSubmit={handleAccessSubmit}
+          onCancel={() => navigation.goBack()}
+        />
+      </Screen>
+    );
+  }
+
   return (
     <Screen edges={['top']}>
       <View style={styles.topBar}>
@@ -172,8 +257,7 @@ export function UploadScreen() {
           <View style={styles.head}>
             <Text style={styles.title}>Submit a thesis</Text>
             <Text style={styles.subtitle}>
-              Enter your upload access code and manuscript details. A librarian will review your
-              submission.
+              Add your manuscript details below. A librarian will review your submission.
             </Text>
           </View>
 
@@ -183,17 +267,13 @@ export function UploadScreen() {
             </View>
           ) : null}
 
-          <SectionLabel>Access</SectionLabel>
-          <TextField
-            label="Upload access code"
-            placeholder="Provided by the library"
-            value={accessCode}
-            onChangeText={setAccessCode}
-            autoCapitalize="characters"
-            leftIcon={<KeyRound size={18} color={colors.textMuted} />}
-          />
-
           <SectionLabel>Submitter</SectionLabel>
+          <View style={styles.verifiedBanner}>
+            <CheckCircle2 size={16} color={colors.approved} />
+            <Text style={styles.verifiedBannerText}>
+              Access code verified — your details are pre-filled below.
+            </Text>
+          </View>
           <TextField label="Your name" placeholder="Full name" value={uploaderName} onChangeText={setUploaderName} />
           <TextField
             label="Institutional email"
@@ -354,6 +434,38 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   errorText: { ...typography.small, color: colors.rejected },
+  locked: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+    gap: spacing.md,
+  },
+  lockBadge: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockTitle: {
+    ...typography.h2,
+    fontFamily: fonts.display,
+    color: colors.primaryDark,
+    textAlign: 'center',
+  },
+  lockBody: { ...typography.bodyMuted, textAlign: 'center', maxWidth: 300 },
+  verifiedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.approvedBg,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  verifiedBannerText: { ...typography.small, color: colors.approved, flex: 1 },
   success: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, padding: spacing.xl },
   successTitle: { ...typography.h1, fontFamily: fonts.display, textAlign: 'center' },
   successBody: { ...typography.bodyMuted, textAlign: 'center' },
