@@ -29,7 +29,7 @@ export const queryKeys = {
 };
 
 /** Infinite, paginated browse list (approved theses). */
-export function useBrowseTheses(params: Omit<BrowseParams, 'page'>) {
+export function useBrowseTheses(params: Omit<BrowseParams, 'page'>, enabled = true) {
   return useInfiniteQuery({
     queryKey: queryKeys.browse(params),
     initialPageParam: 1,
@@ -38,6 +38,7 @@ export function useBrowseTheses(params: Omit<BrowseParams, 'page'>) {
     getNextPageParam: (lastPage) =>
       lastPage.has_next ? lastPage.current_page + 1 : undefined,
     placeholderData: keepPreviousData,
+    enabled,
   });
 }
 

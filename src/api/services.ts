@@ -465,6 +465,9 @@ export const guestApi = {
     accessLevel?: 'browse' | 'upload';
     sessionId?: string;
     srCode?: string;
+    gender?: string;
+    category?: string;
+    course?: string;
   }): Promise<void> {
     await apiClient
       .post('/track/guest-session', {
@@ -473,6 +476,9 @@ export const guestApi = {
         accessLevel: input.accessLevel ?? 'browse',
         sessionId: input.sessionId,
         srCode: input.srCode,
+        gender: input.gender ?? '',
+        category: input.category ?? '',
+        course: input.course ?? '',
       })
       .catch(() => undefined);
   },
