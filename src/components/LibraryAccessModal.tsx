@@ -7,10 +7,11 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Check, ChevronDown } from 'lucide-react-native';
+import { Check } from 'lucide-react-native';
 
 import { TextField } from '@/components/ui/TextField';
 import { Button } from '@/components/ui/Button';
+import { Select } from '@/components/ui/Select';
 import { formatPersonName } from '@/utils/format';
 import { colors, fonts, radius, shadows, spacing, typography } from '@/theme';
 
@@ -209,72 +210,6 @@ export function LibraryAccessModal({ visible, submitting, error, onCancel, onSub
   );
 }
 
-/* ── Inline Select (nested modal picker) ─────────────────────────────────── */
-
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-function Select({
-  label,
-  placeholder,
-  value,
-  display,
-  options,
-  onChange,
-}: {
-  label: string;
-  placeholder: string;
-  value: string;
-  display?: string;
-  options: SelectOption[];
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selectedLabel = display || options.find((o) => o.value === value)?.label;
-
-  return (
-    <View style={styles.selectWrap}>
-      <Text style={styles.selectLabel}>{label}</Text>
-      <Pressable style={styles.selectField} onPress={() => setOpen(true)}>
-        <Text style={[styles.selectValue, !selectedLabel && styles.selectPlaceholder]} numberOfLines={1}>
-          {selectedLabel || placeholder}
-        </Text>
-        <ChevronDown size={18} color={colors.textMuted} />
-      </Pressable>
-
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.pickerBackdrop} onPress={() => setOpen(false)}>
-          <Pressable style={styles.pickerCard}>
-            <Text style={styles.pickerTitle}>{label}</Text>
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerScroll}>
-              {options.map((opt) => {
-                const active = opt.value === value;
-                return (
-                  <Pressable
-                    key={opt.value}
-                    style={[styles.pickerRow, active && styles.pickerRowActive]}
-                    onPress={() => {
-                      onChange(opt.value);
-                      setOpen(false);
-                    }}
-                  >
-                    <Text style={[styles.pickerRowText, active && styles.pickerRowTextActive]}>
-                      {opt.label}
-                    </Text>
-                    {active ? <Check size={16} color={colors.primary} /> : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -307,59 +242,6 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: 'row', gap: spacing.md },
   col: { flex: 1 },
-
-  // Select
-  selectWrap: { gap: spacing.xs, flex: 1 },
-  selectLabel: { ...typography.label },
-  selectField: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: 50,
-    backgroundColor: colors.surface,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-  },
-  selectValue: { ...typography.body, flex: 1, marginRight: spacing.sm },
-  selectPlaceholder: { color: colors.textMuted },
-
-  // Picker overlay
-  pickerBackdrop: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.xl,
-  },
-  pickerCard: {
-    width: '100%',
-    maxWidth: 420,
-    maxHeight: '70%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    ...shadows.soft,
-  },
-  pickerTitle: {
-    ...typography.label,
-    color: colors.primaryDark,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-  },
-  pickerScroll: { flexGrow: 0 },
-  pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-  },
-  pickerRowActive: { backgroundColor: colors.surfaceMuted },
-  pickerRowText: { ...typography.body, flex: 1, marginRight: spacing.sm },
-  pickerRowTextActive: { color: colors.primary, fontFamily: fonts.sansSemibold },
 
   // Consent
   consent: {

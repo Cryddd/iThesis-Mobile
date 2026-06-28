@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import { absoluteMediaUrl } from '@/config/env';
 import { getOrCreateDeviceId } from '@/utils/deviceId';
+import { normalizeExtractedAbstract, type ThesisAutofillFields } from '@/utils/thesisAutofill';
 import type {
   AccessCode,
   AccessCodeStatus,
@@ -203,6 +204,45 @@ export const thesisApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return { trackingCode: data.trackingCode ?? '' };
+  },
+
+  /**
+   * POST /theses/extract-fields (multipart, field `pdf`). Reads a manuscript or
+   * executive-summary PDF and returns best-effort auto-fill metadata
+   * { authors, authors_list, title, abstract, adviser, department_code, year,
+   *   year_confidence, year_suggestion }.
+   */
+  async extractFields(file: {
+    uri: string;
+    name: string;
+    mimeType?: string;
+  }): Promise<ThesisAutofillFields> {
+    const form = new FormData();
+    form.append('pdf', {
+      uri: file.uri,
+      name: file.name,
+      type: file.mimeType ?? 'application/pdf',
+    } as unknown as Blob);
+
+    const { data } = await apiClient.post<Partial<ThesisAutofillFields>>(
+      '/theses/extract-fields',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+
+    return {
+      authors: typeof data?.authors === 'string' ? data.authors : '',
+      authors_list: Array.isArray(data?.authors_list)
+        ? data.authors_list.filter((x): x is string => typeof x === 'string')
+        : undefined,
+      title: typeof data?.title === 'string' ? data.title : '',
+      abstract: typeof data?.abstract === 'string' ? normalizeExtractedAbstract(data.abstract) : '',
+      adviser: typeof data?.adviser === 'string' ? data.adviser : '',
+      department_code: typeof data?.department_code === 'string' ? data.department_code : '',
+      year: typeof data?.year === 'number' ? data.year : null,
+      year_confidence: typeof data?.year_confidence === 'string' ? data.year_confidence : 'none',
+      year_suggestion: typeof data?.year_suggestion === 'number' ? data.year_suggestion : null,
+    };
   },
 
   /** PATCH /theses/{id}/details — librarian metadata fix (title/adviser/authors). */

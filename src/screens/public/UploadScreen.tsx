@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,19 +18,27 @@ import {
   CheckCircle2,
   Copy,
   FileText,
+  Sparkles,
   Upload as UploadIcon,
 } from 'lucide-react-native';
 
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
+import { Select, type SelectOption } from '@/components/ui/Select';
 import { Screen } from '@/components/ui/Screen';
 import { UploadAccessModal, type UploadAccessInfo } from '@/components/UploadAccessModal';
 import { useDepartments } from '@/hooks/queries';
 import { accessApi, guestApi, thesisApi } from '@/api/services';
 import { describeApiError } from '@/api/client';
 import { readGuestSession, saveGuestSession } from '@/utils/guestSession';
+import {
+  ABSTRACT_MAX_WORDS,
+  limitWords,
+  pickAutofillYear,
+  splitAuthorsIfCommaSeparated,
+  type ThesisAutofillFields,
+} from '@/utils/thesisAutofill';
 import { colors, fonts, radius, spacing, typography } from '@/theme';
-import type { Department } from '@/types';
 import type { RootStackParamList } from '@/navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -86,20 +95,125 @@ export function UploadScreen() {
   const [error, setError] = useState('');
   const [trackingCode, setTrackingCode] = useState<string | null>(null);
 
+  // PDF auto-fill state (mirrors the web's extract-on-upload behaviour).
+  const [extracting, setExtracting] = useState(false);
+  const [manuscriptMsg, setManuscriptMsg] = useState('');
+  const [summaryExtracting, setSummaryExtracting] = useState(false);
+  const [summaryMsg, setSummaryMsg] = useState('');
+
   const authorList = useMemo(
     () => authors.split(',').map((a) => a.trim()).filter(Boolean),
     [authors],
   );
   const abstractWords = abstract.trim() ? abstract.trim().split(/\s+/).length : 0;
 
-  const pick = async (setter: (f: PickedFile) => void) => {
+  const departmentOptions = useMemo<SelectOption[]>(
+    () => (departments ?? []).map((d) => ({ value: d.code, label: d.name })),
+    [departments],
+  );
+  const selectedDeptLabel = departments?.find((d) => d.code === departmentCode)?.name;
+
+  /**
+   * Pre-fills form fields from extracted PDF metadata, only where the user
+   * hasn't typed a value yet. Mirrors the web's `applyAutoFilledFields`.
+   */
+  const applyAutoFill = (
+    fields: ThesisAutofillFields,
+    opts: {
+      allowAbstract: boolean;
+      allowTitle: boolean;
+      allowAuthors?: boolean;
+      allowAdviser?: boolean;
+      allowDepartment?: boolean;
+      allowYear?: boolean;
+    },
+  ) => {
+    const allowAuthors = opts.allowAuthors !== false;
+    const allowAdviser = opts.allowAdviser !== false;
+    const allowDepartment = opts.allowDepartment !== false;
+    const allowYear = opts.allowYear !== false;
+
+    if (allowAuthors && ((fields.authors_list && fields.authors_list.length) || fields.authors.trim())) {
+      setAuthors((prev) => {
+        if (prev.trim()) return prev;
+        const fromList = (fields.authors_list || []).map((a) => a.toUpperCase()).filter(Boolean);
+        if (fromList.length) return fromList.join(', ');
+        const parsed = splitAuthorsIfCommaSeparated(fields.authors.toUpperCase());
+        return parsed.length ? parsed.join(', ') : prev;
+      });
+    }
+    if (opts.allowTitle && fields.title.trim()) {
+      setTitle((prev) => (prev.trim() ? prev : fields.title.toUpperCase()));
+    }
+    if (opts.allowAbstract && fields.abstract.trim()) {
+      setAbstract((prev) => (prev.trim() ? prev : limitWords(fields.abstract, ABSTRACT_MAX_WORDS)));
+    }
+    if (allowAdviser && fields.adviser.trim()) {
+      setAdviser((prev) => (prev.trim() ? prev : fields.adviser.toUpperCase()));
+    }
+    if (allowDepartment && fields.department_code.trim()) {
+      const code = fields.department_code.toUpperCase();
+      setDepartmentCode((prev) => {
+        if (prev) return prev;
+        const match = (departments ?? []).find((d) => d.code.toUpperCase() === code);
+        return match?.code ?? prev;
+      });
+    }
+    if (allowYear) {
+      const picked = pickAutofillYear(fields);
+      if (picked) setYear((prev) => (prev.trim() ? prev : String(picked)));
+    }
+  };
+
+  const pickPdf = async (): Promise<PickedFile | null> => {
     const res = await DocumentPicker.getDocumentAsync({
       type: 'application/pdf',
       copyToCacheDirectory: true,
     });
-    if (!res.canceled && res.assets?.[0]) {
-      const a = res.assets[0];
-      setter({ uri: a.uri, name: a.name, mimeType: a.mimeType });
+    if (res.canceled || !res.assets?.[0]) return null;
+    const a = res.assets[0];
+    return { uri: a.uri, name: a.name, mimeType: a.mimeType };
+  };
+
+  // Manuscript → extract title, authors, adviser, department, year (NOT abstract).
+  const pickManuscript = async () => {
+    const picked = await pickPdf();
+    if (!picked) return;
+    setFile(picked);
+    setExtracting(true);
+    setManuscriptMsg('Reading the manuscript and auto-filling details…');
+    try {
+      const fields = await thesisApi.extractFields(picked);
+      applyAutoFill(fields, { allowAbstract: false, allowTitle: true });
+      setManuscriptMsg('Details auto-filled from the manuscript — please verify and correct.');
+    } catch {
+      setManuscriptMsg('Uploaded, but auto-fill failed. Please fill the details manually.');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  // Executive summary → extract the abstract only.
+  const pickSummary = async () => {
+    const picked = await pickPdf();
+    if (!picked) return;
+    setSummary(picked);
+    setSummaryExtracting(true);
+    setSummaryMsg('Reading the executive summary for the abstract…');
+    try {
+      const fields = await thesisApi.extractFields(picked);
+      applyAutoFill(fields, {
+        allowAbstract: true,
+        allowTitle: false,
+        allowAuthors: false,
+        allowAdviser: false,
+        allowDepartment: false,
+      });
+      setSummaryMsg('Abstract auto-filled from the executive summary — please verify.');
+    } catch {
+      setSummaryMsg('Uploaded, but abstract extraction failed. Please enter it manually.');
+    } finally {
+      setSummaryExtracting(false);
     }
   };
 
@@ -285,6 +399,30 @@ export function UploadScreen() {
           />
           <TextField label="SR code" placeholder="e.g. 21-12345" value={uploaderSrCode} onChangeText={setUploaderSrCode} />
 
+          {/* Documents first — uploading the manuscript auto-fills the details below. */}
+          <SectionLabel>Documents</SectionLabel>
+          <View style={styles.autofillNote}>
+            <Sparkles size={15} color={colors.primary} />
+            <Text style={styles.autofillNoteText}>
+              Upload your manuscript and we'll auto-fill the title, authors, adviser, department and
+              year. The abstract is read from your executive summary.
+            </Text>
+          </View>
+          <FilePicker
+            label="Manuscript (PDF) *"
+            file={file}
+            busy={extracting}
+            message={manuscriptMsg}
+            onPress={pickManuscript}
+          />
+          <FilePicker
+            label="Executive summary (PDF)"
+            file={summary}
+            busy={summaryExtracting}
+            message={summaryMsg}
+            onPress={pickSummary}
+          />
+
           <SectionLabel>Thesis details</SectionLabel>
           <TextField label="Thesis title" placeholder="Full title" value={title} onChangeText={setTitle} />
           <TextField
@@ -296,24 +434,14 @@ export function UploadScreen() {
           />
           <TextField label="Adviser" placeholder="Thesis adviser" value={adviser} onChangeText={setAdviser} />
 
-          <View style={{ gap: spacing.xs }}>
-            <Text style={styles.fieldLabel}>Department</Text>
-            <View style={styles.deptWrap}>
-              {departments?.map((d: Department) => (
-                <Pressable
-                  key={d.id}
-                  onPress={() => setDepartmentCode((c) => (c === d.code ? undefined : d.code))}
-                  style={[styles.deptChip, departmentCode === d.code && styles.deptChipActive]}
-                >
-                  <Text
-                    style={[styles.deptChipText, departmentCode === d.code && styles.deptChipTextActive]}
-                  >
-                    {d.code || d.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
+          <Select
+            label="Department"
+            placeholder="Select department"
+            value={departmentCode ?? ''}
+            display={selectedDeptLabel}
+            options={departmentOptions}
+            onChange={setDepartmentCode}
+          />
 
           <TextField
             label="Publication year (optional)"
@@ -325,22 +453,14 @@ export function UploadScreen() {
           />
           <TextField
             label="Abstract"
-            placeholder="Brief summary of the study (max 300 words)"
+            placeholder="Auto-filled from your executive summary (max 300 words)"
             value={abstract}
-            onChangeText={setAbstract}
+            onChangeText={(t) => setAbstract(limitWords(t, ABSTRACT_MAX_WORDS))}
             multiline
             numberOfLines={5}
             style={styles.textArea}
             error={abstractWords > 300 ? `Abstract is ${abstractWords} words (max 300).` : undefined}
             hint={abstractWords > 0 ? `${abstractWords}/300 words` : undefined}
-          />
-
-          <SectionLabel>Files</SectionLabel>
-          <FilePicker label="Manuscript (PDF) *" file={file} onPress={() => pick(setFile)} />
-          <FilePicker
-            label="Executive summary (PDF, optional)"
-            file={summary}
-            onPress={() => pick(setSummary)}
           />
 
           <Button
@@ -364,21 +484,34 @@ function SectionLabel({ children }: { children: string }) {
 function FilePicker({
   label,
   file,
+  busy,
+  message,
   onPress,
 }: {
   label: string;
   file: PickedFile | null;
+  busy?: boolean;
+  message?: string;
   onPress: () => void;
 }) {
   return (
     <View style={{ gap: spacing.xs }}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <Pressable onPress={onPress} style={[styles.dropzone, file && styles.dropzoneFilled]}>
-        <FileText size={20} color={file ? colors.primary : colors.textMuted} />
+      <Pressable
+        onPress={onPress}
+        disabled={busy}
+        style={[styles.dropzone, file && styles.dropzoneFilled]}
+      >
+        {busy ? (
+          <ActivityIndicator size="small" color={colors.primary} />
+        ) : (
+          <FileText size={20} color={file ? colors.primary : colors.textMuted} />
+        )}
         <Text style={[styles.dropzoneText, file && styles.dropzoneTextFilled]} numberOfLines={1}>
           {file ? file.name : 'Tap to choose a PDF'}
         </Text>
       </Pressable>
+      {message ? <Text style={styles.extractMsg}>{message}</Text> : null}
     </View>
   );
 }
@@ -400,18 +533,15 @@ const styles = StyleSheet.create({
   },
   textArea: { minHeight: 110, textAlignVertical: 'top', paddingTop: spacing.md },
   fieldLabel: { ...typography.label },
-  deptWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  deptChip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+  autofillNote: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
   },
-  deptChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  deptChipText: { ...typography.small, color: colors.textSecondary },
-  deptChipTextActive: { color: colors.white, fontFamily: fonts.sansSemibold },
+  autofillNoteText: { ...typography.small, flex: 1, color: colors.primaryDark, lineHeight: 19 },
+  extractMsg: { ...typography.small, color: colors.textSecondary, paddingHorizontal: spacing.xs },
   dropzone: {
     flexDirection: 'row',
     alignItems: 'center',
